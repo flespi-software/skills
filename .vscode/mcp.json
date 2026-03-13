@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "id": "flespiToken",
+      "type": "promptString",
+      "description": "Flespi Token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "flespi-develop": {
+      "type": "http",
+      "url": "https://flespi.io/ai/mcp/develop",
+      "headers": {
+        "Authorization": "FlespiToken ${input:flespiToken}"
+      }
+    }
+  }
+}

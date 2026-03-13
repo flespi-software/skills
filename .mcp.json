@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "flespi-develop": {
+      "type": "http",
+      "url": "https://flespi.io/ai/mcp/develop",
+      "headers": {
+        "Authorization": "FlespiToken ${FLESPI_TOKEN}"
+      }
+    },
+    "flespi-support": {
+      "type": "http",
+      "url": "https://flespi.io/ai/mcp/support",
+      "headers": {
+        "Authorization": "FlespiToken ${FLESPI_TOKEN}"
+      }
+    }
+  }
+}

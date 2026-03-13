@@ -1,0 +1,20 @@
+{
+  "name": "flespi-skills",
+  "owner": {
+    "name": "flespi",
+    "email": "info@flespi.com"
+  },
+  "metadata": {
+    "description": "flespi IoT and telematics platform skills for AI coding assistants"
+  },
+  "plugins": [
+    {
+      "name": "flespi",
+      "source": "./",
+      "description": "flespi REST API, MQTT broker, and platform reference for developing IoT and telematics applications",
+      "version": "1.0.0",
+      "keywords": ["iot", "telematics", "mqtt", "gps", "tracking", "flespi"],
+      "license": "MIT"
+    }
+  ]
+}

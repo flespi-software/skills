@@ -1,0 +1,28 @@
+{
+  "name": "flespi",
+  "description": "flespi IoT and telematics cloud platform — REST API, MQTT broker, device management, and analytics reference for AI coding assistants",
+  "version": "1.0.0",
+  "author": {
+    "name": "flespi",
+    "url": "https://flespi.com"
+  },
+  "homepage": "https://github.com/flespi-software/skills",
+  "repository": "https://github.com/flespi-software/skills",
+  "license": "MIT",
+  "mcpServers": {
+    "flespi-develop": {
+      "type": "http",
+      "url": "https://flespi.io/ai/mcp/develop",
+      "headers": {
+        "Authorization": "FlespiToken ${FLESPI_TOKEN}"
+      }
+    },
+    "flespi-support": {
+      "type": "http",
+      "url": "https://flespi.io/ai/mcp/support",
+      "headers": {
+        "Authorization": "FlespiToken ${FLESPI_TOKEN}"
+      }
+    }
+  }
+}
