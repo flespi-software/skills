@@ -220,7 +220,6 @@ data: {"count": 10, "fields": "timestamp,position.latitude,position.longitude,po
 | `reverse` | `true` for latest-first |
 | `from` / `to` | Time range (unix UTC) |
 | `filter` | flespi expression to filter records |
-| `domain` | Limits fields by domain (e.g. `position`, `can`) |
 
 Latest message: `data={"count":1,"reverse":true}`
 
