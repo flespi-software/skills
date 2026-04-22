@@ -334,11 +334,11 @@ Sub-resource assignment pattern (streams, calcs, plugins, groups): `POST /gw/{en
 | Platform | `/platform/` | `customer`, `tokens`, `subaccounts`, `webhooks`, `grants`, `realms`, `logs`, `statistics` |
 | Storage | `/storage/` | `containers` (generic message storage), `cdns` (file storage) |
 | MQTT | `/mqtt/` | `sessions`, `subscriptions` |
-| AI tools | `/ai/` | `tools/search-api-methods`, `tools/get-api-schema`, `tools/search-flespi-documentation`, `tools/generate-flespi-expression`, `logs` |
+| AI tools | `/ai/` | `tools/search-api-methods`, `tools/api-method-schema`, `tools/search-flespi-documentation`, `tools/generate-flespi-expression`, `logs` |
 
 ## API Discovery
 
-The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `get-api-schema` MCP tools for on-demand endpoint discovery rather than reading the full OpenAPI specs.
+The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `api-method-schema` MCP tools for on-demand endpoint discovery rather than reading the full OpenAPI specs. Schema retrieval is not optional - see API Call Discipline in the MCP Tools Guide for the discover-schema-compose-execute pattern every call follows.
 
 ### OpenAPI/Swagger Specifications
 
@@ -357,7 +357,7 @@ search-api-methods: queries=["list device types", "get device messages"]
 
 Get full schema for a specific endpoint (use links from search results):
 ```
-get-api-schema: link="https://flespi.io/docs/#/gw/devices/get_devices_dev_selector_messages"
+api-method-schema: link="https://flespi.io/docs/#/gw/devices/get_devices_dev_selector_messages"
 ```
 
 # flespi MQTT Broker
@@ -492,10 +492,22 @@ How to effectively use flespi MCP tools. Choose the right tool for the task to m
 | `flespi-api-read` | 0 | Execute GET requests to flespi REST API |
 | `flespi-api-write` | 0 | Execute POST/PUT/PATCH/DELETE requests (requires user approval) |
 | `search-api-methods` | 0 | Discover API endpoints by semantic search |
-| `get-api-schema` | 0 | Get full OpenAPI schema for a specific endpoint |
+| `api-method-schema` | 0 | Get full OpenAPI schema for a specific endpoint |
 | `search-flespi-documentation` | 5 | Search knowledge base, blog, API docs for concepts and guidance |
 | `search-device-documentation` | 10 | Search device/protocol-specific documentation (hardware specs, commands, wiring) |
 | `consult-flespi-account` | 30 | Delegate complex analysis to a platform expert with account access |
+
+## API Call Discipline
+
+Every `flespi-api-read` and `flespi-api-write` call follows this pattern, no exceptions. Both discovery and schema retrieval are free (0 credits) - use them liberally.
+
+1. **Discover** - use `search-api-methods` when the endpoint path is not already known from an earlier call in this conversation. Pick the matching entry; its `link` feeds step 2.
+2. **Retrieve the schema** - before any `flespi-api-read`/`flespi-api-write` call, ensure `api-method-schema` has been retrieved for that exact endpoint path in this conversation. A schema already fetched for the same path earlier is reusable; a schema mentioned by docs or implied by prior responses substitutes only when it names the exact path you are about to call. A field the schema does not declare is rejected on write and reads back absent on response.
+3. **Compose** - build the URL from the schema: selectors and field projection in the path, query parameters where declared, a body only when the schema declares a request body.
+4. **Execute** - `flespi-api-read` for GET; `flespi-api-write` for POST/PUT/PATCH/DELETE. Always confirm writes with the user before calling.
+5. **Handle the response** - check `errors` before indexing into `result`. On a code=2 (bad-request) retry, re-read the schema before composing the retry rather than tweaking the failed body - a body the platform rejected is evidence the cached schema-understanding is wrong.
+
+Guessing field names or paths from training knowledge is the primary source of code=2 rejections - the schema is the authoritative contract.
 
 ## Decision Tree
 
@@ -509,7 +521,7 @@ What do you need?
 |   --> search-api-methods, then flespi-api-read
 |
 +-- Need exact field names or request body format
-|   --> get-api-schema (requires link from search-api-methods)
+|   --> api-method-schema (requires link from search-api-methods)
 |
 +-- Data aggregation or analytics (total mileage, trip count, max speed)
 |   --> search-flespi-documentation FIRST (learn about calculate method/calculators)
@@ -517,7 +529,7 @@ What do you need?
 |
 +-- Complex configuration (streams, plugins, webhooks, calculators)
 |   --> search-flespi-documentation to understand the feature
-|   --> get-api-schema for exact field format
+|   --> api-method-schema for exact field format
 |   --> flespi-api-write to create (with user approval)
 |
 +-- Write flespi expressions (selectors, counters, filters, templates)
@@ -530,7 +542,7 @@ What do you need?
 |   --> consult-flespi-account (expensive, use only when simpler tools won't suffice)
 |
 +-- API call returned unexpected results or errors
-|   --> search-api-methods or get-api-schema to verify endpoint details
+|   --> search-api-methods or api-method-schema to verify endpoint details
 |   --> Check schema_hint in error response for valid field names
 ```
 
@@ -607,9 +619,9 @@ queries: ["get device messages", "device telemetry"]
 queries: ["calculate method for devices"]
 ```
 
-Use the returned `link` field with `get-api-schema` for full details.
+Use the returned `link` field with `api-method-schema` for full details.
 
-### get-api-schema
+### api-method-schema
 Get full OpenAPI schema for a specific endpoint. Use links from `search-api-methods`.
 
 **Parameters:**
@@ -724,8 +736,9 @@ flespi-api-write: method=POST url=/gw/devices/123/calculate
 
 ## Key Principles
 
-1. **Prefer server-side operations** - use API selectors, expressions, `?fields=`, and the calculate method instead of fetching everything and filtering locally
-2. **Search docs before aggregation** - flespi has powerful server-side analytics; learn them before iterating client-side
-3. **Minimize response size** - always use `?fields=` for collections and `count`+`fields` for messages
-4. **Escalate gradually** - start with free tools (api-read, search-api-methods), use paid tools only when needed
-5. **Never write without approval** - always present planned mutations to the user first
+1. **Fetch schema before calling** - every endpoint path touched by `flespi-api-read`/`flespi-api-write` needs its own `api-method-schema` retrieval in this conversation first (see API Call Discipline); guessing field names causes code=2 rejections
+2. **Prefer server-side operations** - use API selectors, expressions, `?fields=`, and the calculate method instead of fetching everything and filtering locally
+3. **Search docs before aggregation** - flespi has powerful server-side analytics; learn them before iterating client-side
+4. **Minimize response size** - always use `?fields=` for collections and `count`+`fields` for messages
+5. **Escalate gradually** - start with free tools (api-read, search-api-methods), use paid tools only when needed
+6. **Never write without approval** - always present planned mutations to the user first
