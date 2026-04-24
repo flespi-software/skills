@@ -296,14 +296,96 @@ This is a POST even though it only reads data. Use it for on-demand aggregation 
 | 404 | Entity not found |
 | 429 | Rate limit exceeded |
 
+## Messages, Telemetry, and Logs
+
+Three distinct read shapes. They are not interchangeable - pick by the question shape:
+
+- **`/messages`** - time-series of every data point ever received. Historical, complete, can be large. Retention bounded by the device's `messages_ttl`. Use to trace behavior over time, compute aggregates via `/calculate`, or retrieve specific records by timestamp.
+- **`/telemetry`** - latest-value snapshot per parameter. flespi merges each new message into a single current-state object keyed by parameter name, with each parameter carrying its own last-update timestamp. Cheaper and smaller than `/messages` for "what is this device doing right now" questions.
+- **`/logs`** - operational events on the entity itself (connections, settings, commands, errors). Not data. Use for diagnostic questions about the entity's lifecycle.
+
+Common mis-selection: "what is the device's last position" fetched via `/messages` with `data={"count":1,"reverse":true}` when `/telemetry` is smaller and faster. Use `/messages` only when you need the full record shape for a specific timestamp or when recent activity patterns are what matters.
+
 ## Logs
 
-Most entities have `/logs` sub-resource for operation history:
+Entity `/logs` sub-resources carry operational events. GET pattern:
 ```
 GET /gw/devices/123/logs  data={"count":10,"reverse":true}
 GET /gw/streams/456/logs  data={"count":10,"reverse":true}
 GET /platform/customer/logs  data={"count":10,"reverse":true}
 ```
+
+### Common event codes
+
+Channel events (`origin_type=9`):
+- **100** - connection accepted (raw TCP/UDP/HTTP)
+- **101** - device identified (handshake complete)
+- **102** - connection closed with `close_code`
+
+Device events (`origin_type=11`):
+- **300 / 301** - connected / disconnected; 301 carries `close_code`, `duration`, `msgs`, `recv`, `send`
+- **305** - data processing warning, invalid parameters removed (commonly zero/invalid GPS during cold start, or unsupported protocol-specific data)
+- **310** - setting value received from the device
+- **312 / 313** - device accepted / rejected a setting
+- **316** - setting unreadable after retries
+- **317** - setting sent to the device
+- **330 / 334** - command queued / delivered
+- **333** - queued command expired before delivery
+
+### Close codes
+
+On events 102 and 301:
+
+- **4** / `{ext}` - device violates protocol; compare raw bytes against manufacturer spec
+- **5** - flespi-side implementation bug; route to flespi support
+- **7** - flespi server restart (benign)
+- **8** - protocol implementation updated by flespi (mass brief reconnect expected)
+- **12** - ident collision: device opened a new connection without closing the old
+- **17** - inactivity timeout (10-minute fixed)
+- **18** / `{uns}` - parameter not yet integrated; route to flespi for integration
+- **19** / `{mis}` - misaligned traffic; usually bot noise, ignore
+- **21 / 23** - channel blocked / device disabled (account-side state change)
+
+## Device Commands and Settings
+
+### Execution modes
+
+Two endpoints for sending commands:
+
+- `POST /gw/devices/{selector}/commands` - real-time. Blocks 5-60 seconds waiting for the device's reply (default `timeout` 30s), returns the reply inline, fails immediately if the device is offline. Use for immediate actions on a device known to be online.
+- `POST /gw/devices/{selector}/commands-queue` - queued. Returns a command id immediately, persists until `ttl` / `expires`, delivers on next connect. Retrieve the reply asynchronously via `GET /gw/devices/{selector}/commands-result`. Queued is the reliable default and natively handles offline devices.
+
+Both endpoints accept shared options: `priority`, `max_attempts` (default 3), `condition` (flespi expression re-evaluated before each delivery attempt - e.g., gate a reboot on `$position.speed == 0`), `meta` (small JSON blob echoed in logs and the command result). Queued-only: `ttl` (delivery window, up to 30 days).
+
+### Settings as a device shadow
+
+Each setting on a device carries `current` (last value read from or applied to the device), `pending` (a write waiting for the device to reconnect), `mode` (readable / writable bit flags), `status` (source of `current` plus flespi intent bits).
+
+REST on `/gw/devices/{selector}/settings/{name}`: `PUT` writes a new `pending` value and overwrites any previous pending (settings are not a queue); `DELETE` forces flespi to re-read `current` from the device on next connect; `DELETE` with `data={"pending":true}` cancels a pending write without triggering a re-read.
+
+### Verify after write
+
+A queued command or setting write is not complete when the queue API returns - it completes when the device acknowledges. Real-time command replies arrive inline in the POST response; queued command replies retrieve via `/commands-result` keyed on the returned command id; settings verify via the updated `current` value on the settings object plus lifecycle events 312 (accepted) / 313 (rejected) / 316 (unreadable) in device `/logs` (see Logs above). Confirm the outcome to the user only after the device-side acknowledgement is observed - quote the applied value or the rejection reason, not just "the write was queued".
+
+## Recycle Bin and Restoration
+
+Most entity DELETEs are reversible for 30 days. Deleted items land in `/platform/deleted/` instead of being permanently removed, with their original `id`, configuration, and messages preserved. Listing `/platform/deleted/` (or the endpoint's schema) is the authoritative check on whether a specific entity type can be restored.
+
+**Permanent DELETE, no bin**: telemetry field DELETE, message DELETE, container record DELETE, CDN or media file DELETE.
+
+Restore via:
+```
+flespi-api-write: method=POST url=/platform/deleted/{deleted-selector}/restore
+  data={}
+```
+
+Selector forms: deleted-item trash `id`; original `item_id==<id>`; expression on the deleted record (e.g., `{data.configuration.ident=="IMEI_VALUE"}`).
+
+**Restoration gotchas**:
+- Assignments are not auto-restored - device-to-group, device-to-calculator, device-to-stream, device-to-plugin links must be manually re-linked after restore.
+- Calculator intervals on restored devices are not retained - need recomputation from restored messages.
+- Restore fails if the channel URI is reoccupied, an `ident` collides, or account limits have been reached.
+- The recycle bin is subaccount-scoped - access each subaccount's bin via `x-flespi-cid` (or `cid` param) to see its deleted items.
 
 ## Gateway API Surface (`/gw/`)
 
@@ -497,6 +579,34 @@ How to effectively use flespi MCP tools. Choose the right tool for the task to m
 | `search-device-documentation` | 10 | Search device/protocol-specific documentation (hardware specs, commands, wiring) |
 | `consult-flespi-account` | 30 | Delegate complex analysis to a platform expert with account access |
 
+## Knowledge Authority
+
+Different sources are authoritative for different question kinds. When sources conflict, the source authoritative for the question at hand wins - there is no single linear ranking.
+
+| Question | Authoritative source | Not authorized by |
+|---|---|---|
+| What does this endpoint expect or return (URL shape, selectors, fields, body, response)? | `api-method-schema` for that path | `search-flespi-documentation` (docs describe intent, not contract); a prior response at that path (a result is not a contract); training-data recall |
+| How does a flespi feature work, why, and what are the tradeoffs? | `search-flespi-documentation` | `api-method-schema` (shape, not rationale); training-data recall |
+| What is this account's current state (entities, config, connectivity, message values)? | `flespi-api-read` against the account | Docs, schema, training-data recall |
+| What does a specific device model do (protocol spec, command catalog, wiring, firmware)? | `search-device-documentation` | `search-flespi-documentation` (platform behavior, not device facts); training-data recall |
+
+Training-data knowledge of flespi is the weakest source - useful for framing the right question to the authoritative tool, never authoritative for the answer itself. A documentation result describing an endpoint's fields is not schema: call `api-method-schema` for that path even when docs appear to fully describe it.
+
+## Design Discipline
+
+For any change that involves more than one entity, reshapes data flow, or leaves a composition decision open, compose on paper before composing any call. Simple reads and single-entity updates skip this; multi-entity setups, new integrations, and architectural questions start here.
+
+1. **Ground each decision with documentation**. Every architectural decision (where to place data, which primitive to use, how to scope access, how to isolate) is its own question for `search-flespi-documentation`. Frame each search specifically - "how are custom parameters scoped across subaccounts" rather than "tell me about plugins". One generic sweep does not cover multiple decisions.
+2. **Verify what the token can reach**. Documentation describes platform-wide intent; a live catalog read confirms what this specific token actually has access to. `/auth/info` returns the token's access shape; list-endpoint reads confirm entity availability.
+3. **Sample current account state**. Focused reads of the namespaces the design will touch - existing entities with overlapping purpose (reuse beats create), naming conventions to respect, active traffic on items about to be changed.
+4. **Map each input to the richest primitive**. For each user input (identifiers, phone numbers, metadata, routing rules), pick the most semantically-fitting field:
+   - Native fields first (searchable, command-aware): `configuration.ident`, `phone`, `device_type_id`, and similar schema-declared fields.
+   - Entity metadata for reference data not covered by native fields.
+   - Custom message parameters via plugin for values that must appear on every message.
+   - Calculator counters for computed or aggregated values.
+   An input that does not cleanly fit surfaces as an open question to the user, not as a forced metadata entry.
+5. **Compose a proposal**. Decisions with recommended choice + rejected alternative + rationale - not an execution plan only. Confirm with the user before any write.
+
 ## API Call Discipline
 
 Every `flespi-api-read` and `flespi-api-write` call follows this pattern, no exceptions. Both discovery and schema retrieval are free (0 credits) - use them liberally.
@@ -535,8 +645,13 @@ What do you need?
 +-- Write flespi expressions (selectors, counters, filters, templates)
 |   --> flespi-api-write: POST /ai/tools/generate-flespi-expression {"question": "..."}
 |
-+-- Device hardware, wiring, firmware, SMS commands
++-- Device hardware, wiring, firmware reference
 |   --> search-device-documentation (requires protocol_name + device_type_name)
+|
++-- Compose a device command (reboot, setting change, custom)
+|   --> api-method-schema for /gw/devices/*/commands or /commands-queue (REST contract)
+|   --> search-device-documentation for the protocol's command catalog (name, properties, reply shape)
+|   --> then flespi-api-write with user approval
 |
 +-- Multi-step account analysis or debugging
 |   --> consult-flespi-account (expensive, use only when simpler tools won't suffice)
@@ -715,6 +830,9 @@ flespi-api-write: method=POST url=/gw/devices
 To find device_type_id: `flespi-api-read: url=/gw/channel-protocols/all?fields=id,title`
 
 ### Send a command to device
+
+Command composition pairs two authoritative sources: `api-method-schema` for the REST contract (real-time `/commands` vs queued `/commands-queue`, shared options like `ttl`, `condition`, `max_attempts`) and `search-device-documentation` for the per-device-type catalog (correct name, properties, reply shape, SMS-only flags). Command names vary by device type - never compose a payload from training-data knowledge.
+
 ```
 flespi-api-write: method=POST url=/gw/devices/123/commands
   data=[{"name":"getinfo","properties":{}}]
