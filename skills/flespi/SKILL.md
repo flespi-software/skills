@@ -265,7 +265,7 @@ No pagination. Page the device list first, then fetch telemetry per batch of IDs
 
 Server-side aggregation without a persistent calculator:
 ```
-POST /gw/devices/{selector}/calculate
+GET /gw/devices/{selector}/messages/calculate
 data: {
   "from": 1700000000,
   "to": 1700086400,
@@ -276,7 +276,7 @@ data: {
   ]
 }
 ```
-This is a POST even though it only reads data. Use it for on-demand aggregation instead of fetching all messages client-side.
+Use it for on-demand aggregation instead of fetching all messages client-side. For aggregating already-calculated intervals across devices, use `GET /gw/calcs/{selector}/devices/{dev-selector}/intervals/calculate` with the same body shape.
 
 ## Auxiliary Headers
 
@@ -394,9 +394,9 @@ Each entity supports standard CRUD via selectors. Sub-resources provide access t
 | Entity | Path | Key Sub-resources |
 |--------|------|-------------------|
 | Channels | `/gw/channels` | `/messages`, `/logs`, `/connections`, `/idents` |
-| Devices | `/gw/devices` | `/messages`, `/telemetry`, `/logs`, `/commands-queue`, `/commands-result`, `/settings`, `/connections`, `/media`, `/packets`, `/sms`, `/geofences`, `/calculate` |
+| Devices | `/gw/devices` | `/messages`, `/messages/calculate`, `/telemetry`, `/logs`, `/commands-queue`, `/commands-result`, `/settings`, `/connections`, `/media`, `/packets`, `/sms`, `/geofences` |
 | Streams | `/gw/streams` | `/logs`, `/messages`, `/packets`, `/channels/*`, `/devices/*`, `/groups/*`, `/geofences/*` |
-| Calculators | `/gw/calcs` | `/logs`, `/devices/*/intervals`, `/devices/*/calculate`, `/devices/*/recalculate`, `/assets/*`, `/groups/*`, `/geofences/*` |
+| Calculators | `/gw/calcs` | `/logs`, `/devices/*/intervals`, `/devices/*/intervals/calculate`, `/devices/*/recalculate`, `/assets/*`, `/groups/*`, `/geofences/*` |
 | Plugins | `/gw/plugins` | `/logs`, `/packets`, `/devices/*`, `/groups/*`, `/geofences/*` |
 | Geofences | `/gw/geofences` | `/logs`, `/hittest` |
 | Groups | `/gw/groups` | `/logs`, `/devices/*`, `/assets/*`, `/geofences/*` |
@@ -420,9 +420,9 @@ Sub-resource assignment pattern (streams, calcs, plugins, groups): `POST /gw/{en
 
 ## API Discovery
 
-The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `api-method-schema` MCP tools for on-demand endpoint discovery rather than reading the full OpenAPI specs. Schema retrieval is not optional - see API Call Discipline in the MCP Tools Guide for the discover-schema-compose-execute pattern every call follows.
+The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `api-method-schema` MCP tools for on-demand endpoint discovery rather than reading the full Swagger specs. Schema retrieval is not optional - see API Call Discipline in the MCP Tools Guide for the discover-schema-compose-execute pattern every call follows.
 
-### OpenAPI/Swagger Specifications
+### Swagger Specifications
 
 Static specs for offline reference:
 - `https://flespi.io/gw/api.json` - channels, devices, streams, calcs, plugins, etc.
@@ -574,10 +574,9 @@ How to effectively use flespi MCP tools. Choose the right tool for the task to m
 | `flespi-api-read` | 0 | Execute GET requests to flespi REST API |
 | `flespi-api-write` | 0 | Execute POST/PUT/PATCH/DELETE requests (requires user approval) |
 | `search-api-methods` | 0 | Discover API endpoints by semantic search |
-| `api-method-schema` | 0 | Get full OpenAPI schema for a specific endpoint |
+| `api-method-schema` | 0 | Get full Swagger schema for a specific endpoint |
 | `search-flespi-documentation` | 5 | Search knowledge base, blog, API docs for concepts and guidance |
 | `search-device-documentation` | 10 | Search device/protocol-specific documentation (hardware specs, commands, wiring) |
-| `consult-flespi-account` | 30 | Delegate complex analysis to a platform expert with account access |
 
 ## Knowledge Authority
 
@@ -653,9 +652,6 @@ What do you need?
 |   --> search-device-documentation for the protocol's command catalog (name, properties, reply shape)
 |   --> then flespi-api-write with user approval
 |
-+-- Multi-step account analysis or debugging
-|   --> consult-flespi-account (expensive, use only when simpler tools won't suffice)
-|
 +-- API call returned unexpected results or errors
 |   --> search-api-methods or api-method-schema to verify endpoint details
 |   --> Check schema_hint in error response for valid field names
@@ -715,10 +711,6 @@ data: {"name": "Renamed Device"}
 
 method: DELETE
 url: /gw/devices/123
-
-method: POST
-url: /gw/devices/123/calculate
-data: {"from":1700000000, "to":1700086400, "selectors":[{"type":"datetime"}], "counters":[{"type":"expression","name":"mileage","method":"summary","expression":"mileage()"}]}
 ```
 
 ### search-api-methods
@@ -737,7 +729,7 @@ queries: ["calculate method for devices"]
 Use the returned `link` field with `api-method-schema` for full details.
 
 ### api-method-schema
-Get full OpenAPI schema for a specific endpoint. Use links from `search-api-methods`.
+Get full Swagger schema for a specific endpoint. Use links from `search-api-methods`.
 
 **Parameters:**
 - `link` (required): ApiBox documentation URL starting with `https://flespi.io/docs/#/`
@@ -769,22 +761,6 @@ flespi-api-read: url=/gw/channel-protocols/{protocol}/device-types/all?fields=ti
 ```
 
 Not all protocols have device documentation (e.g. software protocols like wialon-ips, mqtt).
-
-### consult-flespi-account
-Delegate complex questions to a platform expert that can read the user's account data.
-
-**Parameters:**
-- `question` (required): Detailed question
-
-**Use sparingly (30 credits).** Only when:
-- Multiple API calls and cross-referencing are needed
-- Deep platform expertise is required for analysis
-- Simpler tools cannot answer the question
-
-**Do NOT use for:**
-- Simple data retrieval (use flespi-api-read)
-- Documentation questions (use search-flespi-documentation)
-- Listing or status checks
 
 ## Common Patterns
 
@@ -848,7 +824,7 @@ Use for: calculator selectors/counters, webhook templates, plugin expressions, R
 
 ### On-demand analytics (calculate method)
 ```
-flespi-api-write: method=POST url=/gw/devices/123/calculate
+flespi-api-read: url=/gw/devices/123/messages/calculate
   data={"from":1700000000,"to":1700086400,"selectors":[{"type":"datetime"}],"counters":[{"type":"expression","name":"mileage","method":"summary","expression":"mileage()"}]}
 ```
 
