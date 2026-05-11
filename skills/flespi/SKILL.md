@@ -470,6 +470,8 @@ Use QoS 1 with persistent sessions (`clean=false`) for reliable message delivery
 
 All flespi topics follow the pattern: `flespi/{category}/{module}/{entity}/{id}/...`
 
+Full topics dictionary: https://flespi.io/const/values?names=toolbox/topics
+
 ## Payload
 
 All flespi topics contain valid UTF-8 string: number, boolean, string, JSON
