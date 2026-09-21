@@ -117,8 +117,10 @@ flespi expressions are used across the platform: in calculators, plugins, stream
 - Nested access: `$position.speed`, `$can.vehicle.mileage`
 - Previous value (calculators/plugins only): `previous("param_name")`
 - Built-in functions: `mileage()`, `distance_to(lat,lon)`, `duration()`, `geofence("name")`
-- Operators: `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `!`, `? :`
+- Operators: `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `in` (string list membership)
+- No `!` or `? :` operators - use `not()` and `if()` functions
 - String matching: `~` (wildcard match)
+- Strings: single or double quotes; `\` escapes a quote or a backslash inside
 - Webhook templating: `%{$device.name}%`
 - REST filter: `{"filter": "position.speed>60&&position.valid==true"}`
 
@@ -132,6 +134,9 @@ Base URL: `https://flespi.io`
 | `/storage/` | Containers, CDNs |
 | `/platform/` | Customer, tokens, subaccounts, webhooks, grants, realms, logs, statistics |
 | `/mqtt/` | MQTT sessions, subscriptions |
+| `/realm/` | Customer-owned user directories: per-realm info, login, OAuth flows |
+| `/auth/` | Authentication and account lifecycle: logins, OAuth, email and password management, token info |
+| `/ai/` | AI agents, connectors, connector-types, tools, logs |
 
 ## Authentication
 
@@ -142,7 +147,7 @@ Every request requires: `Authorization: FlespiToken <key>`
 | Type | `access.type` | Scope |
 |------|---------------|-------|
 | Master | 1 | Full access including platform API (tokens, subaccounts, webhooks, realms). Can create other tokens. |
-| Standard | 0 | Telematics entities only (channels, devices, streams, calcs, plugins, etc.). No platform API. |
+| Standard | 0 | Everything except the platform API (telematics entities, storage, MQTT, AI, etc.). |
 | ACL | 2 | Granular per-URI, per-method, per-item permissions. Default-deny - only explicitly allowed actions work. |
 
 ### Obtaining a Token
@@ -416,19 +421,24 @@ Sub-resource assignment pattern (streams, calcs, plugins, groups): `POST /gw/{en
 | Platform | `/platform/` | `customer`, `tokens`, `subaccounts`, `webhooks`, `grants`, `realms`, `logs`, `statistics` |
 | Storage | `/storage/` | `containers` (generic message storage), `cdns` (file storage) |
 | MQTT | `/mqtt/` | `sessions`, `subscriptions` |
-| AI tools | `/ai/` | `tools/search-api-methods`, `tools/api-method-schema`, `tools/search-flespi-documentation`, `tools/generate-flespi-expression`, `logs` |
+| AI | `/ai/` | `agents`, `connectors`, `connector-types`, `tools/search-api-methods`, `tools/api-method-schema`, `tools/search-flespi-documentation`, `tools/generate-flespi-expression`, `logs` |
+| Realm | `/realm/` | customer-owned user directories: `{realm-public-id}/info`, `user`, `login`, `oauth`, `identity-providers` |
+| Auth | `/auth/` | authentication and account lifecycle: `login`, `oauth`, `account`, `email`, `password`, `info` |
 
 ## API Discovery
 
-The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `api-method-schema` MCP tools for on-demand endpoint discovery rather than reading the full Swagger specs. Schema retrieval is not optional - see API Call Discipline in the MCP Tools Guide for the discover-schema-compose-execute pattern every call follows.
+The flespi REST API schema is large (76+ endpoints in `/gw/` alone, plus `/platform/`, `/storage/`, `/mqtt/`, `/realm/`, `/auth/`, `/ai/`). When a flespi token is available, prefer using the `search-api-methods` and `api-method-schema` MCP tools for on-demand endpoint discovery rather than reading the full Swagger specs. Schema retrieval is not optional - see API Call Discipline in the MCP Tools Guide for the discover-schema-compose-execute pattern every call follows.
 
 ### Swagger Specifications
 
 Static specs for offline reference:
 - `https://flespi.io/gw/api.json` - channels, devices, streams, calcs, plugins, etc.
+- `https://flespi.io/storage/api.json` - containers and CDNs
 - `https://flespi.io/mqtt/api.json` - MQTT sessions and subscriptions
 - `https://flespi.io/platform/api.json` - platform (tokens, subaccounts, webhooks, realms, etc.)
-- `https://flespi.io/ai/api.json` - AI tools
+- `https://flespi.io/realm/api.json` - realm logins and OAuth flows
+- `https://flespi.io/auth/api.json` - authentication and account lifecycle
+- `https://flespi.io/ai/api.json` - AI (agents, connectors, connector-types, tools)
 
 ### Search Tools (preferred when token is available)
 
@@ -578,7 +588,9 @@ How to effectively use flespi MCP tools. Choose the right tool for the task to m
 | `search-api-methods` | 0 | Discover API endpoints by semantic search |
 | `api-method-schema` | 0 | Get full Swagger schema for a specific endpoint |
 | `search-flespi-documentation` | 5 | Search knowledge base, blog, API docs for concepts and guidance |
-| `search-device-documentation` | 10 | Search device/protocol-specific documentation (hardware specs, commands, wiring) |
+| `search-device-documentation` | 10 | Search device/protocol-specific documentation (hardware specs, commands, wiring) - support server only |
+| `generate-flespi-expression` | 2 | Generate a flespi expression from a natural language description |
+| `classify-driving-events` | 1-10 | Review a device video or image for ADAS/DSM driving events and verify the alarms the device reported - support server only |
 
 ## Knowledge Authority
 
@@ -644,10 +656,14 @@ What do you need?
 |   --> flespi-api-write to create (with user approval)
 |
 +-- Write flespi expressions (selectors, counters, filters, templates)
-|   --> flespi-api-write: POST /ai/tools/generate-flespi-expression {"question": "..."}
+|   --> generate-flespi-expression
 |
 +-- Device hardware, wiring, firmware reference
 |   --> search-device-documentation (requires protocol_name + device_type_name)
+|
++-- Was the ADAS/DSM alarm of a dashcam real, what does its footage show
+|   --> flespi-api-read for the message with media.video.X / media.image.X and for the alarm message next to it
+|   --> classify-driving-events with the media url and the alarm message
 |
 +-- Compose a device command (reboot, setting change, custom)
 |   --> api-method-schema for /gw/devices/*/commands or /commands-queue (REST contract)
@@ -817,10 +833,15 @@ flespi-api-write: method=POST url=/gw/devices/123/commands
 ```
 Check available commands: `flespi-api-read: url=/gw/channel-protocols/{protocol_id}/device-types/{type_id}?fields=commands`
 
+### Review the footage of a dashcam alarm
+```
+classify-driving-events: url="https://media.flespi.io/<uuid>" message={"dsm.driver.phone.event":true,"position.speed":53}
+```
+Use for: telling a real ADAS/DSM alarm from a false one, finding out what a device video or image shows. The `url` comes from the `media.video.X` or `media.image.X` parameter of a device message, and the alarm is often a separate message of the same device a few seconds to minutes earlier.
+
 ### Generate a flespi expression
 ```
-flespi-api-write: method=POST url=/ai/tools/generate-flespi-expression
-  data={"question":"Filter devices with speed greater than 80 km/h"}
+generate-flespi-expression: question="Filter devices with speed greater than 80 km/h"
 ```
 Use for: calculator selectors/counters, webhook templates, plugin expressions, REST API filters, stream filters.
 
